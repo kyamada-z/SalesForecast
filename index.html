@@ -3,181 +3,76 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SaaS風 派遣売上シミュレーション</title>
+    <title>派遣売上シミュレーション</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://unpkg.com/recharts/umd/Recharts.js"></script>
-    <script src="https://unpkg.com/lucide@latest"></script>
-    <script src="https://unpkg.com/lucide-react@latest"></script>
-    
-    <style>
-        body { background-color: #f9fafb; }
-        .recharts-responsive-container { min-height: 200px; }
-    </style>
 </head>
-<body>
-    <div id="root"></div>
+<body class="bg-slate-50 min-h-screen">
+    <div id="root">
+        <div class="flex items-center justify-center h-screen text-slate-400">読み込み中...</div>
+    </div>
 
-    <script type="text/babel">
-        const { useState, useMemo, useEffect } = React;
-        const { 
-            LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, 
-            Tooltip: RechartsTooltip, Legend, ResponsiveContainer, ComposedChart 
-        } = Recharts;
-        const { Calculator, Info, TrendingUp, Users, DollarSign } = lucide;
-
-        // --- 計算ロジック ---
-        const calculateSimulation = (params) => {
-            const { initialUsers, unitPrice, churnRate, newUsersPerMonth, directPayRate, socialInsuranceRate, months } = params;
-            let monthlyData = [];
-            let currentExistingUsers = initialUsers;
-            let currentNewUsers = 0;
-            let totalExistingRevenue = 0;
-            let totalNewRevenue = 0;
-            let totalNewTheoreticalRevenue = 0;
-
-            for (let month = 1; month <= months; month++) {
-                currentExistingUsers = currentExistingUsers * (1 - churnRate);
-                const existingRevenue = currentExistingUsers * unitPrice;
-                totalExistingRevenue += existingRevenue;
-
-                const existingTheoreticalRevenue = initialUsers * unitPrice;
-                const existingLostRevenue = existingTheoreticalRevenue - existingRevenue;
-
-                currentNewUsers = (currentNewUsers + newUsersPerMonth) * (1 - churnRate);
-                const newRevenue = currentNewUsers * unitPrice;
-                totalNewRevenue += newRevenue;
-
-                const newTheoreticalUsers = month * newUsersPerMonth;
-                const newTheoreticalRevenue = newTheoreticalUsers * unitPrice;
-                totalNewTheoreticalRevenue += newTheoreticalRevenue;
-                const newLostRevenue = newTheoreticalRevenue - newRevenue;
-
-                monthlyData.push({
-                    month: `${month}ヶ月目`,
-                    existingUsers: currentExistingUsers,
-                    existingRevenue,
-                    existingLostRevenue,
-                    newUsers: currentNewUsers,
-                    newRevenue,
-                    newLostRevenue,
-                    totalUsers: currentExistingUsers + currentNewUsers,
-                    totalRevenue: existingRevenue + newRevenue,
-                });
-            }
-
-            const finalUsers = monthlyData.length > 0 ? monthlyData[months - 1].totalUsers : initialUsers;
-            return {
-                monthlyData,
-                finalUsers,
-                plMetrics: {
-                    existingRevenue: totalExistingRevenue,
-                    existingChurnLoss: (initialUsers * unitPrice * months) - totalExistingRevenue,
-                    newRevenue: totalNewRevenue,
-                    newChurnLoss: totalNewTheoreticalRevenue - totalNewRevenue,
-                    totalRevenue: totalExistingRevenue + totalNewRevenue,
-                    existingTheoreticalPeriodRevenue: initialUsers * unitPrice * months,
-                    newTheoreticalPeriodRevenue: totalNewTheoreticalRevenue
-                },
-                saasMetrics: { endingARR: finalUsers * unitPrice * 12 }
-            };
-        };
-
-        const formatCurrency = (v) => new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY', maximumFractionDigits: 0 }).format(v);
-        const formatNumber = (v) => new Intl.NumberFormat('ja-JP', { maximumFractionDigits: 1 }).format(v);
-
-        // --- コンポーネント ---
-        const MetricCard = ({ title, value, description, type = 'default' }) => {
-            const styles = {
-                default: 'bg-white border-gray-200 text-gray-800',
-                primary: 'bg-blue-50 border-blue-200 text-blue-900',
-                danger: 'bg-red-50 border-red-200 text-red-900',
-                success: 'bg-green-50 border-green-200 text-green-900',
-                purple: 'bg-purple-50 border-purple-200 text-purple-900',
-            };
-            return (
-                <div className={`p-4 rounded-xl border relative group transition-colors flex-1 shadow-sm ${styles[type]}`}>
-                    <div className="text-xs font-medium mb-1 flex items-center gap-1 opacity-80">
-                        <span>{title}</span>
-                    </div>
-                    <div className="text-lg font-bold">{value}</div>
-                </div>
-            );
-        };
+    <script>
+        // ブラウザが直接理解できる形式（翻訳不要）にしました
+        const { useState, useMemo } = React;
+        const { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ComposedChart, Line, Legend } = Recharts;
 
         function App() {
-            const [params, setParams] = useState({
-                initialUsers: 530,
-                unitPrice: 280000,
-                churnRate: 0.055,
-                newUsersPerMonth: 33,
-                directPayRate: 0.7499,
-                socialInsuranceRate: 0.1027,
-                months: 12,
-            });
+            const [p, setP] = useState({ initialUsers: 530, price: 280000, churn: 0.055, newUsers: 33, months: 12 });
 
-            const result = useMemo(() => calculateSimulation(params), [params]);
+            const data = useMemo(() => {
+                let monthlyData = [];
+                let currentUsers = p.initialUsers;
+                for (let i = 1; i <= p.months; i++) {
+                    currentUsers = (currentUsers + p.newUsers) * (1 - p.churn);
+                    monthlyData.push({ name: i + 'ヶ月', 稼働数: Math.round(currentUsers), 売上: Math.round(currentUsers * p.price) });
+                }
+                return monthlyData;
+            }, [p]);
 
-            return (
-                <div className="max-w-7xl mx-auto p-4 md:p-8 space-y-6">
-                    <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-                        <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-                            SaaS風 派遣売上シミュレーション (HTML版)
-                        </h1>
-                    </div>
-
-                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-                        <div className="lg:col-span-3 space-y-4">
-                            <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
-                                <h2 className="text-lg font-semibold border-b pb-3 mb-4">前提条件</h2>
-                                <div className="space-y-4">
-                                    {Object.keys(params).map(key => (
-                                        <div key={key}>
-                                            <label className="block text-xs font-medium text-gray-500 mb-1">{key}</label>
-                                            <input 
-                                                type="number" 
-                                                value={key.includes('Rate') ? params[key] * 100 : params[key]} 
-                                                onChange={(e) => setParams(prev => ({...prev, [key]: key.includes('Rate') ? e.target.value/100 : parseFloat(e.target.value)}))}
-                                                className="w-full p-2 border rounded-md bg-gray-50 text-right"
-                                            />
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="lg:col-span-9 space-y-6">
-                            <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
-                                <h3 className="text-lg font-semibold mb-4">売上予測内訳</h3>
-                                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                    <MetricCard title="既存実績売上" value={formatCurrency(result.plMetrics.existingRevenue)} type="primary" />
-                                    <MetricCard title="新規実績売上" value={formatCurrency(result.plMetrics.newRevenue)} type="success" />
-                                    <MetricCard title="期間総売上" value={formatCurrency(result.plMetrics.totalRevenue)} type="purple" />
-                                </div>
-                                <div className="h-64 mt-8">
-                                    <ResponsiveContainer width="100%" height="100%">
-                                        <BarChart data={result.monthlyData}>
-                                            <CartesianGrid strokeDasharray="3 3" />
-                                            <XAxis dataKey="month" />
-                                            <YAxis />
-                                            <RechartsTooltip />
-                                            <Legend />
-                                            <Bar dataKey="existingRevenue" name="既存実績" fill="#3B82F6" stackId="a" />
-                                            <Bar dataKey="newRevenue" name="新規実績" fill="#10B981" stackId="a" />
-                                        </BarChart>
-                                    </ResponsiveContainer>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
+            return React.createElement('div', { className: 'max-w-6xl mx-auto p-4 md:p-10 space-y-6' },
+                React.createElement('div', { className: 'bg-white p-6 rounded-2xl shadow-sm border border-slate-200' },
+                    React.createElement('h1', { className: 'text-2xl font-bold' }, '📊 派遣売上シミュレーション'),
+                    React.createElement('p', { className: 'text-sm text-slate-400 mt-1' }, 'URLで誰にでも共有可能な正式版')
+                ),
+                React.createElement('div', { className: 'grid grid-cols-1 lg:grid-cols-4 gap-6' },
+                    React.createElement('div', { className: 'lg:col-span-1 bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4' },
+                        React.createElement('h2', { className: 'font-bold border-b pb-2' }, '条件設定'),
+                        ['initialUsers', 'price', 'newUsers'].map(key => 
+                            React.createElement('div', { key },
+                                React.createElement('label', { className: 'block text-xs text-slate-400 mb-1' }, key),
+                                React.createElement('input', {
+                                    type: 'number',
+                                    value: p[key],
+                                    onChange: e => setP({ ...p, [key]: Number(e.target.value) }),
+                                    className: 'w-full p-2 bg-slate-50 border rounded-lg text-right font-mono'
+                                })
+                            )
+                        )
+                    ),
+                    React.createElement('div', { className: 'lg:col-span-3 bg-white p-6 rounded-2xl shadow-sm border border-slate-200' },
+                        React.createElement('div', { className: 'h-80 w-full' },
+                            React.createElement(ResponsiveContainer, null,
+                                React.createElement(ComposedChart, { data: data },
+                                    React.createElement(CartesianGrid, { strokeDasharray: '3 3', vertical: false, stroke: '#f0f0f0' }),
+                                    React.createElement(XAxis, { dataKey: 'name' }),
+                                    React.createElement(YAxis, { width: 80 }),
+                                    React.createElement(Tooltip, null),
+                                    React.createElement(Legend, null),
+                                    React.createElement(Bar, { dataKey: '売上', fill: '#3b82f6', radius: [4, 4, 0, 0] }),
+                                    React.createElement(Line, { type: 'monotone', dataKey: '稼働数', stroke: '#f43f5e', strokeWidth: 3 })
+                                )
+                            )
+                        )
+                    )
+                )
             );
         }
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
+        root.render(React.createElement(App));
     </script>
 </body>
 </html>
