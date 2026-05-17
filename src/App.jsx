@@ -1,481 +1,729 @@
-import React, { useState, useMemo } from 'react';
-import { TrendingUp, Users, UserPlus, Award, Info, AlertTriangle, CheckCircle2, Calendar, MousePointer2, Settings2, ChevronDown, ChevronUp, Plus, Minus, Calculator } from 'lucide-react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import {
+  LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, ComposedChart
+} from 'recharts';
+import { Calculator, Info, TrendingUp, Users, DollarSign, Sparkles, Loader2, Save, MessageCircle, Send, History, Trash2, Clock, Check } from 'lucide-react';
 
-const App = () => {
-  // --- 成果目標の状態管理 ---
-  const [staffCount, setStaffCount] = useState(100); 
-  const [hrSalesYearly, setHrSalesYearly] = useState(12000000); 
-  const [friendReferralsYearly, setFriendReferralsYearly] = useState(12); 
-  
-  // 退職率改善の達成回数 (四半期ごと、年間計4回)
-  const [achievementsTier1, setAchievementsTier1] = useState(0); 
-  const [achievementsTier2, setAchievementsTier2] = useState(0); 
-  
-  // チャレンジ型の給与調整設定
-  const [deemedOvertimeDeduction, setDeemedOvertimeDeduction] = useState(38000); 
+const apiKey = "";
 
-  // --- インセンティブ単価設定の状態管理 ---
-  const [showSettings, setShowSettings] = useState(false);
-  const [staffIncentiveRate, setStaffIncentiveRate] = useState(50); 
-  const [hrRateNormal, setHrRateNormal] = useState(2); 
-  const [hrRateChallenge, setHrRateChallenge] = useState(4); 
-  const [friendAmountNormal, setFriendAmountNormal] = useState(5000); 
-  const [friendAmountChallenge, setFriendAmountChallenge] = useState(12500); 
-
-  const [turnoverNormalT1, setTurnoverNormalT1] = useState(12000);
-  const [turnoverNormalT2, setTurnoverNormalT2] = useState(24000);
-  const [turnoverChallengeT1, setTurnoverChallengeT1] = useState(30000);
-  const [turnoverChallengeT2, setTurnoverChallengeT2] = useState(60000);
-
-  // 達成回数のバリデーション（合計4回まで）
-  const updateTier1 = (val) => {
-    const next = Math.max(0, Math.min(4, val));
-    if (next + achievementsTier2 > 4) {
-      setAchievementsTier2(4 - next);
-    }
-    setAchievementsTier1(next);
+// Gemini API呼び出し関数（対話履歴を配列で受け取れるように改修）
+const callGeminiAPI = async (contents) => {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+  const payload = {
+    contents: contents,
   };
 
-  const updateTier2 = (val) => {
-    const next = Math.max(0, Math.min(4, val));
-    if (next + achievementsTier1 > 4) {
-      setAchievementsTier1(4 - next);
+  const maxRetries = 5;
+  const baseDelay = 1000;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      return data.candidates?.[0]?.content?.parts?.[0]?.text || "応答の生成に失敗しました。";
+    } catch (error) {
+      if (attempt === maxRetries) {
+        console.error("API call failed after max retries", error);
+        throw new Error("通信エラーが発生しました。しばらく経ってから再度お試しください。");
+      }
+      const delay = baseDelay * Math.pow(2, attempt);
+      await new Promise(resolve => setTimeout(resolve, delay));
     }
-    setAchievementsTier2(next);
+  }
+};
+
+// --- 計算ロジック (Model) ---
+const calculateSimulation = (params) => {
+  const { initialUsers, unitPrice, churnRate, newUsersPerMonth, directPayRate, socialInsuranceRate, months } = params;
+  
+  let monthlyData = [];
+  let currentExistingUsers = initialUsers;
+  let currentNewUsers = 0;
+  
+  let totalExistingRevenue = 0;
+  let totalNewRevenue = 0;
+  let totalNewTheoreticalRevenue = 0;
+
+  for (let month = 1; month <= months; month++) {
+    currentExistingUsers = currentExistingUsers * (1 - churnRate);
+    const existingRevenue = currentExistingUsers * unitPrice;
+    totalExistingRevenue += existingRevenue;
+
+    const existingTheoreticalUsers = initialUsers;
+    const existingTheoreticalRevenue = existingTheoreticalUsers * unitPrice;
+    const existingLostRevenue = existingTheoreticalRevenue - existingRevenue;
+
+    currentNewUsers = (currentNewUsers + newUsersPerMonth) * (1 - churnRate);
+    const newRevenue = currentNewUsers * unitPrice;
+    totalNewRevenue += newRevenue;
+
+    const newTheoreticalUsers = month * newUsersPerMonth;
+    const newTheoreticalRevenue = newTheoreticalUsers * unitPrice;
+    totalNewTheoreticalRevenue += newTheoreticalRevenue;
+    const newLostRevenue = newTheoreticalRevenue - newRevenue;
+
+    monthlyData.push({
+      month: `${month}ヶ月目`,
+      existingUsers: currentExistingUsers,
+      existingRevenue,
+      existingTheoreticalRevenue,
+      existingLostRevenue,
+      newUsers: currentNewUsers,
+      newRevenue,
+      newTheoreticalRevenue,
+      newLostRevenue,
+      totalUsers: currentExistingUsers + currentNewUsers,
+      totalRevenue: existingRevenue + newRevenue,
+      cost: (existingRevenue + newRevenue) * (directPayRate + socialInsuranceRate),
+    });
+  }
+
+  const initialARR = initialUsers * unitPrice * 12;
+  const existingTheoreticalPeriodRevenue = initialUsers * unitPrice * months;
+  const existingChurnLoss = existingTheoreticalPeriodRevenue - totalExistingRevenue;
+  const newChurnLoss = totalNewTheoreticalRevenue - totalNewRevenue;
+  const totalRevenue = totalExistingRevenue + totalNewRevenue;
+  const finalUsers = monthlyData.length > 0 ? monthlyData[months - 1].totalUsers : initialUsers;
+  const endingARR = finalUsers * unitPrice * 12;
+
+  return {
+    monthlyData,
+    finalUsers,
+    plMetrics: {
+      initialARR,
+      existingTheoreticalPeriodRevenue,
+      existingChurnLoss,
+      existingRevenue: totalExistingRevenue,
+      newTheoreticalPeriodRevenue: totalNewTheoreticalRevenue,
+      newChurnLoss,
+      newRevenue: totalNewRevenue,
+      totalRevenue,
+    },
+    saasMetrics: {
+      endingARR,
+    }
   };
+};
 
-  // 計算ロジック
-  const calculations = useMemo(() => {
-    const months = 12;
+const formatCurrency = (value) => new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY', maximumFractionDigits: 0 }).format(value);
+const formatNumber = (value) => new Intl.NumberFormat('ja-JP', { maximumFractionDigits: 1 }).format(value);
+const yAxisFormatter = (value) => `${value / 10000}万`;
 
-    // チャレンジ型の実質的な月額給与変動額 (手当なし)
-    const netSalaryAdjustment = -deemedOvertimeDeduction;
-
-    // 1. 担当スタッフ数 (月額)
-    const monthlyStaff = staffCount * staffIncentiveRate;
-    
-    // 2. 人材紹介
-    const monthlyHrNormal = (hrSalesYearly / months) * (hrRateNormal / 100);
-    const monthlyHrChallenge = (hrSalesYearly / months) * (hrRateChallenge / 100);
-    
-    // 3. 友人紹介
-    const monthlyFriendNormal = (friendReferralsYearly / months) * friendAmountNormal;
-    const monthlyFriendChallenge = (friendReferralsYearly / months) * friendAmountChallenge;
-    
-    // 4. 退職率改善 (年間の合計支給額を12で割る)
-    const annualTurnoverNormal = (achievementsTier1 * turnoverNormalT1) + (achievementsTier2 * turnoverNormalT2);
-    const annualTurnoverChallenge = (achievementsTier1 * turnoverChallengeT1) + (achievementsTier2 * turnoverChallengeT2);
-    
-    const monthlyTurnoverNormal = annualTurnoverNormal / months;
-    const monthlyTurnoverChallenge = annualTurnoverChallenge / months;
-
-    // --- 月額合計 ---
-    const totalMonthlyNormal = monthlyStaff + monthlyHrNormal + monthlyFriendNormal + monthlyTurnoverNormal;
-    const totalMonthlyChallenge = netSalaryAdjustment + monthlyStaff + monthlyHrChallenge + monthlyFriendChallenge + monthlyTurnoverChallenge;
-
-    // --- 年額合計 ---
-    const totalYearlyNormal = totalMonthlyNormal * months;
-    const totalYearlyChallenge = totalMonthlyChallenge * months;
-
-    return {
-      netSalaryAdjustment,
-      annualTurnoverNormal,
-      annualTurnoverChallenge,
-      monthly: {
-        normal: {
-          total: totalMonthlyNormal,
-          breakdown: [
-            { label: '給与ベース変動', value: 0 },
-            { label: '担当スタッフ数', value: monthlyStaff },
-            { label: '人材紹介', value: monthlyHrNormal },
-            { label: '友人紹介', value: monthlyFriendNormal },
-            { label: '退職率改善', value: monthlyTurnoverNormal },
-          ]
-        },
-        challenge: {
-          total: totalMonthlyChallenge,
-          breakdown: [
-            { label: '給与ベース変動 (控除)', value: netSalaryAdjustment },
-            { label: '担当スタッフ数', value: monthlyStaff },
-            { label: '人材紹介', value: monthlyHrChallenge },
-            { label: '友人紹介', value: monthlyFriendChallenge },
-            { label: '退職率改善', value: monthlyTurnoverChallenge },
-          ]
-        }
-      },
-      yearly: {
-        normal: totalYearlyNormal,
-        challenge: totalYearlyChallenge,
-        diff: totalYearlyChallenge - totalYearlyNormal
-      },
-      monthlyDiff: totalMonthlyChallenge - totalMonthlyNormal
-    };
-  }, [
-    staffCount, hrSalesYearly, friendReferralsYearly, achievementsTier1, achievementsTier2, deemedOvertimeDeduction,
-    staffIncentiveRate, hrRateNormal, hrRateChallenge, friendAmountNormal, friendAmountChallenge,
-    turnoverNormalT1, turnoverNormalT2, turnoverChallengeT1, turnoverChallengeT2
-  ]);
-
-  const formatYen = (val) => new Intl.NumberFormat('ja-JP', { style: 'currency', currency: 'JPY', maximumFractionDigits: 0 }).format(val);
+const MetricCard = ({ title, value, description, type = 'default' }) => {
+  const styles = {
+    default: 'bg-white border-gray-200 text-gray-800',
+    primary: 'bg-blue-50 border-blue-200 text-blue-900',
+    danger: 'bg-red-50 border-red-200 text-red-900',
+    success: 'bg-green-50 border-green-200 text-green-900',
+    purple: 'bg-purple-50 border-purple-200 text-purple-900',
+  };
+  const iconColors = {
+    default: 'text-gray-400',
+    primary: 'text-blue-500',
+    danger: 'text-red-500',
+    success: 'text-green-500',
+    purple: 'text-purple-500',
+  };
 
   return (
-    <div className="min-h-screen bg-slate-50 p-6 md:p-12 font-sans text-slate-800">
-      <div className="max-w-7xl mx-auto">
-        <header className="mb-10 text-center">
-          <div className="inline-flex items-center gap-2 bg-blue-100 text-blue-700 px-5 py-1.5 rounded-full text-sm font-bold mb-6">
-            <MousePointer2 className="w-4 h-4" />
-            17期 インセンティブ・シミュレーター
-          </div>
-          <h1 className="text-4xl md:text-5xl font-black text-slate-900 mb-4 tracking-tight">報酬プラン比較ツール</h1>
-          <p className="text-lg text-slate-500 italic">みなし残業代の控除額に基づいた詳細試算</p>
-        </header>
-
-        {/* 単価設定セクション */}
-        <div className="mb-10">
-          <button 
-            onClick={() => setShowSettings(!showSettings)}
-            className="w-full flex items-center justify-between bg-white p-6 rounded-2xl border border-slate-200 shadow-sm hover:bg-slate-50 transition-colors"
-          >
-            <div className="flex items-center gap-3 text-slate-700 font-bold text-lg">
-              <Settings2 className="w-6 h-6 text-blue-600" />
-              インセンティブ単価の微調整
-            </div>
-            {showSettings ? <ChevronUp className="w-6 h-6"/> : <ChevronDown className="w-6 h-6"/>}
-          </button>
-          
-          {showSettings && (
-            <div className="bg-white border-x border-b border-slate-200 rounded-b-2xl p-8 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-10 shadow-sm animate-in fade-in slide-in-from-top-2 duration-300">
-              <div className="space-y-5 border-r pr-6">
-                <label className="block text-sm font-bold text-slate-400 uppercase tracking-widest">基本設定</label>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-slate-500">スタッフ1名:</span>
-                  <input type="number" value={staffIncentiveRate} onChange={(e) => setStaffIncentiveRate(Number(e.target.value))} className="w-24 p-2 border rounded-lg text-right text-base font-bold shadow-sm" />
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-slate-500">紹介料率(正):</span>
-                  <div className="flex items-center gap-1">
-                    <input type="number" value={hrRateNormal} onChange={(e) => setHrRateNormal(Number(e.target.value))} className="w-16 p-2 border rounded-lg text-right text-base font-bold shadow-sm" />
-                    <span className="text-sm font-bold">%</span>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-blue-600 font-bold">紹介料率(挑):</span>
-                  <div className="flex items-center gap-1">
-                    <input type="number" value={hrRateChallenge} onChange={(e) => setHrRateChallenge(Number(e.target.value))} className="w-16 p-2 border rounded-lg text-right text-base font-bold bg-blue-50 border-blue-100 shadow-sm" />
-                    <span className="text-sm font-bold text-blue-600">%</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="space-y-5 border-r pr-6">
-                <label className="block text-sm font-bold text-slate-400 uppercase tracking-widest">友人紹介(1件)</label>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-slate-500">安定型:</span>
-                  <input type="number" value={friendAmountNormal} onChange={(e) => setFriendAmountNormal(Number(e.target.value))} className="w-28 p-2 border rounded-lg text-right text-base font-bold shadow-sm" />
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-blue-600 font-bold">チャレンジ:</span>
-                  <input type="number" value={friendAmountChallenge} onChange={(e) => setFriendAmountChallenge(Number(e.target.value))} className="w-28 p-2 border rounded-lg text-right text-base font-bold bg-blue-50 border-blue-100 shadow-sm" />
-                </div>
-              </div>
-
-              <div className="space-y-4 lg:col-span-2 grid grid-cols-2 gap-8">
-                 <div className="space-y-4">
-                    <label className="block text-sm font-bold text-slate-400 uppercase tracking-tighter">退職率改善 (1回)</label>
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-slate-500 font-medium">安定 T1:</span>
-                      <input type="number" value={turnoverNormalT1} onChange={(e) => setTurnoverNormalT1(Number(e.target.value))} className="w-20 p-2 border rounded-lg text-right text-sm shadow-sm" />
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-blue-600 font-bold">挑戦 T1:</span>
-                      <input type="number" value={turnoverChallengeT1} onChange={(e) => setTurnoverChallengeT1(Number(e.target.value))} className="w-20 p-2 border rounded-lg text-right text-sm bg-blue-50 border-blue-100 font-bold text-blue-600 shadow-sm" />
-                    </div>
-                 </div>
-                 <div className="space-y-4 pt-8">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-slate-500 font-medium">安定 T2:</span>
-                      <input type="number" value={turnoverNormalT2} onChange={(e) => setTurnoverNormalT2(Number(e.target.value))} className="w-20 p-2 border rounded-lg text-right text-sm shadow-sm" />
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-blue-600 font-bold">挑戦 T2:</span>
-                      <input type="number" value={turnoverChallengeT2} onChange={(e) => setTurnoverChallengeT2(Number(e.target.value))} className="w-20 p-2 border rounded-lg text-right text-sm bg-blue-50 border-blue-100 font-bold text-blue-600 shadow-sm" />
-                    </div>
-                 </div>
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-10">
-          
-          {/* 左カラム: 入力エリア */}
-          <div className="lg:col-span-5 space-y-8">
-            <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-200">
-              <h2 className="text-2xl font-bold flex items-center gap-3 mb-8 border-b pb-4 text-slate-800">
-                <TrendingUp className="w-7 h-7 text-blue-600" />
-                成果目標の設定
-              </h2>
-
-              <div className="space-y-8">
-                <div className="bg-blue-50/20 p-6 rounded-2xl border border-slate-100 shadow-inner">
-                  <label className="block text-lg font-bold text-slate-700 mb-4">月平均 担当スタッフ数 (名)</label>
-                  <div className="flex items-center gap-6 mb-4">
-                    <input 
-                      type="number" 
-                      value={staffCount} 
-                      onChange={(e) => setStaffCount(Number(e.target.value))} 
-                      className="w-28 p-4 border-2 border-white rounded-2xl text-center focus:ring-2 focus:ring-blue-500 outline-none shadow-sm text-2xl font-black text-blue-900"
-                    />
-                    <div className="flex-1">
-                        <input 
-                          type="range" min="0" max="300" step="1" 
-                          value={staffCount} 
-                          onChange={(e) => setStaffCount(Number(e.target.value))} 
-                          className="w-full h-3 bg-blue-200 rounded-lg appearance-none cursor-pointer accent-blue-600" 
-                        />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="bg-blue-50/40 p-6 rounded-2xl border border-blue-100/50">
-                  <label className="block text-lg font-bold text-slate-700 mb-4 underline decoration-blue-200 decoration-4 underline-offset-8">【年間】人材紹介 手数料売上</label>
-                  <div className="relative">
-                    <input 
-                      type="number" 
-                      value={hrSalesYearly} 
-                      onChange={(e) => setHrSalesYearly(Number(e.target.value))} 
-                      className="w-full p-4 pl-12 border-2 border-white rounded-2xl focus:ring-2 focus:ring-blue-500 outline-none shadow-sm text-2xl font-black text-blue-900" 
-                    />
-                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-blue-300 text-2xl font-bold">¥</span>
-                  </div>
-                </div>
-
-                <div className="bg-blue-50/40 p-6 rounded-2xl border border-blue-100/50">
-                  <label className="block text-lg font-bold text-slate-700 mb-4 underline decoration-blue-200 decoration-4 underline-offset-8">【年間】友人紹介 開始数</label>
-                  <div className="flex items-center gap-6">
-                    <input 
-                      type="number" 
-                      value={friendReferralsYearly} 
-                      onChange={(e) => setFriendReferralsYearly(Number(e.target.value))} 
-                      className="w-28 p-4 border-2 border-white rounded-2xl text-center focus:ring-2 focus:ring-blue-500 outline-none shadow-sm text-2xl font-black text-blue-900" 
-                    />
-                    <input 
-                      type="range" min="0" max="100" step="1" 
-                      value={friendReferralsYearly} 
-                      onChange={(e) => setFriendReferralsYearly(Number(e.target.value))} 
-                      className="flex-1 h-3 bg-blue-200 rounded-lg appearance-none cursor-pointer accent-blue-600" 
-                    />
-                  </div>
-                </div>
-
-                {/* 退職率改善達成回数 */}
-                <div className="p-6 bg-slate-50 rounded-2xl border border-slate-200">
-                  <label className="block text-lg font-bold mb-6 text-slate-700 flex items-center justify-between">
-                    <span className="flex items-center gap-2 italic text-blue-700">
-                        <Award className="w-6 h-6" /> 退職率改善 達成回数 (年間)
-                    </span>
-                    <span className="text-xs bg-blue-100 px-3 py-1 rounded-full text-blue-600 font-bold tracking-widest uppercase">Max 4回</span>
-                  </label>
-                  <div className="space-y-5">
-                    <div className="flex items-center justify-between bg-white p-5 rounded-2xl border border-slate-100 shadow-sm">
-                      <span className="text-base font-bold text-slate-600 tracking-tight">0.5~1.0% 改善</span>
-                      <div className="flex items-center gap-5">
-                        <button onClick={() => updateTier1(achievementsTier1 - 1)} className="p-2.5 rounded-full bg-white border border-slate-200 shadow-sm hover:bg-slate-100 transition-colors"><Minus className="w-5 h-5 text-slate-400"/></button>
-                        <span className="w-10 text-center text-2xl font-black text-blue-600 tracking-tighter">{achievementsTier1}</span>
-                        <button onClick={() => updateTier1(achievementsTier1 + 1)} className="p-2.5 rounded-full bg-white border border-slate-200 shadow-sm hover:bg-slate-100 transition-colors"><Plus className="w-5 h-5 text-slate-400"/></button>
-                      </div>
-                    </div>
-                    <div className="flex items-center justify-between bg-white p-5 rounded-2xl border border-slate-100 shadow-sm">
-                      <span className="text-base font-bold text-slate-600 tracking-tight">1.0%以上 改善</span>
-                      <div className="flex items-center gap-5">
-                        <button onClick={() => updateTier2(achievementsTier2 - 1)} className="p-2.5 rounded-full bg-white border border-slate-200 shadow-sm hover:bg-slate-100 transition-colors"><Minus className="w-5 h-5 text-slate-400"/></button>
-                        <span className="w-10 text-center text-2xl font-black text-blue-600 tracking-tighter">{achievementsTier2}</span>
-                        <button onClick={() => updateTier2(achievementsTier2 + 1)} className="p-2.5 rounded-full bg-white border border-slate-200 shadow-sm hover:bg-slate-100 transition-colors"><Plus className="w-5 h-5 text-slate-400"/></button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* 給与調整セクション */}
-                <div className="pt-8 border-t border-slate-100 space-y-6">
-                  <div className="bg-amber-50/50 p-6 rounded-2xl border border-amber-100/50 shadow-sm">
-                    <label className="block text-xs font-black text-amber-600 uppercase tracking-[0.2em] mb-5 flex items-center gap-2">
-                      <AlertTriangle className="w-5 h-5" />
-                      挑戦型：給与ベースの控除調整
-                    </label>
-                    <div className="space-y-6">
-                      <div>
-                        <div className="flex justify-between items-center mb-4">
-                          <span className="text-base font-bold text-slate-600 tracking-tight">みなし残業代の控除額</span>
-                          <span className="text-xl font-black text-red-500">-{formatYen(deemedOvertimeDeduction)}</span>
-                        </div>
-                        <input 
-                          type="range" min="35000" max="40000" step="500" 
-                          value={deemedOvertimeDeduction} 
-                          onChange={(e) => setDeemedOvertimeDeduction(Number(e.target.value))} 
-                          className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-red-400 shadow-inner" 
-                        />
-                        <div className="flex justify-between text-xs text-slate-400 mt-2 font-bold uppercase tracking-wider">
-                            <span>3.5万円</span><span>4.0万円</span>
-                        </div>
-                      </div>
-                      <div className="flex justify-between items-center pt-5 border-t border-amber-200/50 font-black">
-                        <span className="text-xs text-slate-500 tracking-widest uppercase">実質的な月次給与変動</span>
-                        <span className="text-xl text-red-600">{formatYen(calculations.netSalaryAdjustment)}</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* 右カラム: 比較結果 */}
-          <div className="lg:col-span-7 space-y-8">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* 安定型カード */}
-              <div className="bg-white p-8 rounded-[2rem] shadow-sm border-l-8 border-l-slate-300 border border-slate-200 relative group transition-all hover:shadow-xl">
-                <div className="flex justify-between items-start mb-4">
-                  <span className="text-xs font-black text-slate-400 uppercase tracking-[0.2em]">Plan Normal</span>
-                  <span className="px-3 py-1 bg-slate-100 text-slate-500 text-xs font-bold rounded-lg uppercase tracking-wider">安定型</span>
-                </div>
-                <div className="mb-8">
-                  <span className="text-sm font-bold text-slate-400 block mb-2 tracking-tight uppercase">推定月額インセンティブ</span>
-                  <div className="text-5xl font-black text-slate-700 tracking-tighter tabular-nums">
-                    {formatYen(calculations.monthly.normal.total)}
-                    <span className="text-base font-normal text-slate-400 ml-1">/月</span>
-                  </div>
-                </div>
-                <div className="pt-5 border-t border-slate-50 space-y-2 mb-6">
-                  <div className="flex justify-between text-xs text-slate-500 font-black uppercase tracking-wider">
-                    <span>推定年額インセン合計</span>
-                    <span className="text-slate-800 text-base underline decoration-slate-200 underline-offset-4">{formatYen(calculations.yearly.normal)}/年</span>
-                  </div>
-                </div>
-                <div className="space-y-2.5">
-                  {calculations.monthly.normal.breakdown.map((item, i) => (
-                    <div key={i} className={`flex justify-between text-xs font-bold ${item.value === 0 ? 'text-slate-200' : 'text-slate-600'}`}>
-                      <span>{item.label}</span>
-                      <span className="tabular-nums">{formatYen(item.value)}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* チャレンジ型カード */}
-              <div className="bg-white p-8 rounded-[2rem] shadow-xl border-l-8 border-l-blue-600 border border-slate-200 relative ring-4 ring-blue-500/5 transition-all hover:shadow-2xl overflow-hidden">
-                <div className="flex justify-between items-start mb-4">
-                  <span className="text-xs font-black text-blue-300 uppercase tracking-[0.2em]">Plan Challenge</span>
-                  <span className="px-3 py-1 bg-blue-600 text-white text-xs font-bold rounded-lg shadow-sm uppercase tracking-wider">挑戦型</span>
-                </div>
-                <div className="mb-8">
-                  <span className="text-sm font-bold text-blue-600 block mb-2 tracking-tight uppercase">推定月額インセンティブ</span>
-                  <div className="text-5xl font-black text-blue-800 tracking-tighter tabular-nums">
-                    {formatYen(calculations.monthly.challenge.total)}
-                    <span className="text-base font-normal text-slate-400 ml-1">/月</span>
-                  </div>
-                </div>
-                <div className="pt-5 border-t border-blue-50 space-y-2 mb-6">
-                  <div className="flex justify-between text-xs text-blue-600 font-black uppercase tracking-wider">
-                    <span>推定年額インセン合計</span>
-                    <span className="text-blue-900 text-base underline decoration-blue-200 underline-offset-4">{formatYen(calculations.yearly.challenge)}/年</span>
-                  </div>
-                </div>
-                <div className="space-y-2.5">
-                  {calculations.monthly.challenge.breakdown.map((item, i) => (
-                    <div key={i} className={`flex justify-between text-xs font-bold ${item.value < 0 ? 'text-red-500' : 'text-slate-700'}`}>
-                      <span>{item.label}</span>
-                      <span className="tabular-nums font-black">{formatYen(item.value)}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            {/* 年間差額の大見出し */}
-            <div className={`p-10 rounded-[2.5rem] border-4 flex flex-col md:flex-row items-center justify-between gap-10 transition-all duration-700 ${
-              calculations.yearly.diff > 0 ? 'bg-blue-600 text-white border-blue-400 shadow-2xl shadow-blue-200 scale-[1.03]' : 'bg-white border-slate-200 shadow-md'
-            }`}>
-              <div className="flex items-center gap-6">
-                <div className={`p-5 rounded-[1.5rem] ${calculations.yearly.diff > 0 ? 'bg-white/20' : 'bg-slate-100'}`}>
-                  <Calendar className={`w-12 h-12 ${calculations.yearly.diff > 0 ? 'text-white' : 'text-slate-400'}`} />
-                </div>
-                <div>
-                  <h3 className={`text-sm font-black uppercase tracking-[0.3em] mb-2 ${calculations.yearly.diff > 0 ? 'text-blue-100' : 'text-slate-500'}`}>年間収益メリット</h3>
-                  <div className="text-6xl font-black tabular-nums tracking-tighter leading-none">
-                    {calculations.yearly.diff > 0 ? '+' : ''}{formatYen(calculations.yearly.diff)}
-                  </div>
-                </div>
-              </div>
-              <div className="text-center md:text-right">
-                <div className={`text-xs font-black px-6 py-2 rounded-full inline-block uppercase tracking-widest mb-4 ${calculations.yearly.diff > 0 ? 'bg-white text-blue-600' : 'bg-slate-100 text-slate-500'}`}>
-                  {calculations.yearly.diff > 0 ? '挑戦型がお得！' : '安定型が優勢'}
-                </div>
-                <div className={`text-sm font-bold tracking-tight ${calculations.yearly.diff > 0 ? 'text-blue-100' : 'text-slate-400'}`}>
-                  月平均の差額：<span className="text-xl tabular-nums ml-1">{formatYen(calculations.monthlyDiff)}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* ロジック詳細補足 */}
-            <div className="grid grid-cols-1 gap-6">
-                {/* 退職率改善のロジック詳細 */}
-                <div className="bg-white border border-slate-200 p-8 rounded-3xl shadow-sm overflow-hidden relative group">
-                    <div className="absolute top-0 right-0 p-6 opacity-5 transition-transform group-hover:scale-110">
-                        <Calculator className="w-32 h-32 text-slate-900" />
-                    </div>
-                    <div className="flex gap-3 items-center text-slate-800 font-bold text-lg mb-6 border-b border-slate-100 pb-4 relative z-10">
-                        <Award className="w-6 h-6 text-blue-600" />
-                        退職率改善の計算ロジック詳細
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-10 relative z-10">
-                        <div className="space-y-6">
-                            <p className="text-sm text-slate-500 leading-relaxed font-medium">
-                                四半期（3ヶ月）に1回判定・支給される報酬を、月次収支イメージに合わせるため<span className="font-black text-slate-800 border-b-2 border-blue-200">年間合計額の月額平均</span>として算出しています。
-                            </p>
-                            <div className="bg-blue-50/50 p-4 rounded-2xl border border-blue-100 font-mono text-sm shadow-inner">
-                                <p className="text-blue-700 font-black mb-2 tracking-widest uppercase">Formula</p>
-                                <p className="text-slate-700 font-bold leading-relaxed">（達成回数 × 1回単価）÷ 12ヶ月</p>
-                            </div>
-                        </div>
-                        <div className="space-y-4">
-                            <p className="text-xs font-black text-slate-400 uppercase tracking-widest border-b border-slate-50 pb-2">1回達成あたりの支給額設定</p>
-                            <div className="space-y-3">
-                                <div className="flex justify-between items-center text-sm border-b border-slate-50 pb-2">
-                                    <span className="text-slate-600 font-bold tracking-tight">① 0.5~1.0% 改善</span>
-                                    <div className="flex flex-col items-end">
-                                        <span className="text-slate-400 text-xs">安定：{formatYen(turnoverNormalT1)}</span>
-                                        <span className="text-blue-600 font-black text-base">{formatYen(turnoverChallengeT1)}</span>
-                                    </div>
-                                </div>
-                                <div className="flex justify-between items-center text-sm">
-                                    <span className="text-slate-600 font-bold tracking-tight">② 1.0%以上 改善</span>
-                                    <div className="flex flex-col items-end">
-                                        <span className="text-slate-400 text-xs">安定：{formatYen(turnoverNormalT2)}</span>
-                                        <span className="text-blue-600 font-black text-base">{formatYen(turnoverChallengeT2)}</span>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                {/* 給与調整ロジック */}
-                <div className="bg-white border border-slate-200 p-8 rounded-3xl shadow-sm">
-                    <div className="flex gap-3 items-center text-slate-800 font-bold text-lg mb-4 border-b border-slate-100 pb-4">
-                        <AlertTriangle className="w-6 h-6 text-amber-500" />
-                        挑戦型の給与リスク調整
-                    </div>
-                    <p className="text-sm text-slate-500 leading-relaxed font-medium">
-                        挑戦型プランでは、固定給の一部（みなし残業代控除：<span className="text-red-500 font-black">{formatYen(deemedOvertimeDeduction)}</span>）をインセンティブ原資に回しています。この控除を、通常より高い還元率の成果報酬で上回ることが本プランの目的となります。
-                    </p>
-                </div>
-            </div>
-          </div>
-        </div>
+    <div className={`p-3 md:p-4 rounded-xl border relative group transition-colors flex-1 shadow-sm min-w-0 ${styles[type]}`}>
+      <div className="text-xs font-medium mb-1 flex items-center gap-1 opacity-80">
+        <span className="truncate">{title}</span>
+        <Info className={`w-3.5 h-3.5 cursor-help flex-shrink-0 ${iconColors[type]}`} />
+      </div>
+      <div className="text-sm md:text-lg font-bold truncate">{value}</div>
+      <div className="absolute hidden group-hover:block bg-gray-900 text-white text-xs p-3 rounded-lg -top-2 left-1/2 transform -translate-x-1/2 -translate-y-full w-56 md:w-64 z-20 shadow-xl pointer-events-none font-normal leading-relaxed whitespace-normal">
+        {description}
+        <div className="absolute -bottom-1 left-1/2 transform -translate-x-1/2 w-2 h-2 bg-gray-900 rotate-45"></div>
       </div>
     </div>
   );
 };
 
-export default App;
+export default function App() {
+  const [params, setParams] = useState({
+    initialUsers: 530,
+    unitPrice: 280000,
+    churnRate: 0.055,
+    newUsersPerMonth: 33,
+    directPayRate: 0.7499,
+    socialInsuranceRate: 0.1027,
+    months: 12,
+  });
+
+  // AIレポート＆チャット関連のステート
+  const [aiReport, setAiReport] = useState("");
+  const [initialPrompt, setInitialPrompt] = useState("");
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [apiError, setApiError] = useState("");
+  
+  const [chatInput, setChatInput] = useState("");
+  const [chatMessages, setChatMessages] = useState([]);
+  const [isChatting, setIsChatting] = useState(false);
+  
+  // 保存機能関連のステート
+  const [savedReports, setSavedReports] = useState([]);
+  const [isSavedDone, setIsSavedDone] = useState(false);
+  
+  const chatScrollRef = useRef(null);
+
+  const result = useMemo(() => calculateSimulation(params), [params]);
+
+  // ローカルストレージから保存済みレポートを読み込む
+  useEffect(() => {
+    const saved = localStorage.getItem('simulationSavedReports');
+    if (saved) {
+      try {
+        setSavedReports(JSON.parse(saved));
+      } catch (e) {
+        console.error("Failed to load saved reports", e);
+      }
+    }
+  }, []);
+
+  // チャット追加時に一番下へスクロール
+  useEffect(() => {
+    if (chatScrollRef.current) {
+      chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
+    }
+  }, [chatMessages, isChatting]);
+
+  const handleParamChange = (key, value) => {
+    setParams(prev => ({ ...prev, [key]: parseFloat(value) || 0 }));
+    // パラメータが変わったら未保存状態にする
+    setIsSavedDone(false);
+  };
+
+  const generateReport = async () => {
+    setIsGenerating(true);
+    setApiError("");
+    setAiReport("");
+    setChatMessages([]);
+    setIsSavedDone(false);
+
+    const prompt = `あなたは派遣事業に精通した経営コンサルタントです。
+以下の売上シミュレーション結果を分析し、経営陣向けのレポートを作成してください。
+
+【前提条件】
+- シミュレーション期間: ${params.months}ヶ月
+- 期初稼働数: ${params.initialUsers}人
+- 月間単価: ${formatCurrency(params.unitPrice)}
+- 月間退職率: ${params.churnRate * 100}%
+- 月間新規開始数: ${params.newUsersPerMonth}人
+
+【シミュレーション結果（${params.months}ヶ月累計）】
+- 期間予測 総売上: ${formatCurrency(result.plMetrics.totalRevenue)}
+- 既存顧客からの退職減収 (機会損失): ${formatCurrency(result.plMetrics.existingChurnLoss)}
+- 新規顧客からの退職減収 (機会損失): ${formatCurrency(result.plMetrics.newChurnLoss)}
+- 最終月末の総稼働見込: ${formatNumber(result.finalUsers)}人
+
+以下の構成で、簡潔かつ説得力のある回答をしてください。
+※注意：マークダウン記法（**太字**や#など）は使わず、プレーンテキストとして記号（■や・など）を使って読みやすく箇条書きにしてください。
+
+■ シミュレーション結果のサマリー
+■ 退職減収（機会損失）のインパクト評価
+■ 利益を最大化するための具体的なアクションプラン（派遣事業特有の施策を3つ）
+`;
+
+    setInitialPrompt(prompt);
+
+    try {
+      const contents = [{ role: 'user', parts: [{ text: prompt }] }];
+      const reportText = await callGeminiAPI(contents);
+      setAiReport(reportText);
+    } catch (err) {
+      setApiError(err.message);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  const handleSendMessage = async () => {
+    if (!chatInput.trim() || isChatting) return;
+
+    const userMessage = chatInput.trim();
+    setChatInput("");
+    setIsChatting(true);
+    setApiError("");
+
+    const newMessages = [...chatMessages, { role: 'user', text: userMessage }];
+    setChatMessages(newMessages);
+
+    // AIに文脈（初期プロンプト＋レポート＋チャット履歴）をすべて渡す
+    const contents = [
+      { role: 'user', parts: [{ text: initialPrompt }] },
+      { role: 'model', parts: [{ text: aiReport }] },
+      ...newMessages.map(msg => ({ role: msg.role, parts: [{ text: msg.text }] }))
+    ];
+
+    try {
+      const replyText = await callGeminiAPI(contents);
+      setChatMessages([...newMessages, { role: 'model', text: replyText }]);
+      setIsSavedDone(false); // チャットが追加されたら未保存状態へ
+    } catch (err) {
+      setApiError("チャット送信エラー: " + err.message);
+      // エラー時はユーザーのメッセージだけ残すかロールバックするか。今回は残す。
+    } finally {
+      setIsChatting(false);
+    }
+  };
+
+  const handleSaveReport = () => {
+    if (!aiReport) return;
+
+    const newReport = {
+      id: Date.now().toString(),
+      date: new Date().toLocaleString('ja-JP', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute:'2-digit' }),
+      params: { ...params },
+      initialPrompt,
+      reportContent: aiReport,
+      chatMessages: [...chatMessages],
+      summaryRevenue: result.plMetrics.totalRevenue,
+    };
+
+    const updatedReports = [newReport, ...savedReports];
+    setSavedReports(updatedReports);
+    localStorage.setItem('simulationSavedReports', JSON.stringify(updatedReports));
+    setIsSavedDone(true);
+    
+    // 3秒後に「保存しました」表示を消す
+    setTimeout(() => setIsSavedDone(false), 3000);
+  };
+
+  const loadSavedReport = (report) => {
+    if (window.confirm("現在のシミュレーション状態を上書きして、保存されたレポートを復元しますか？")) {
+      setParams(report.params);
+      setAiReport(report.reportContent);
+      setInitialPrompt(report.initialPrompt);
+      setChatMessages(report.chatMessages || []);
+      setApiError("");
+      setIsSavedDone(true); // 読み込み直後は保存済み扱い
+      
+      // 画面一番下へスクロール
+      setTimeout(() => {
+        window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+      }, 100);
+    }
+  };
+
+  const deleteSavedReport = (id, e) => {
+    e.stopPropagation();
+    if (window.confirm("この保存済みレポートを削除しますか？")) {
+      const updatedReports = savedReports.filter(r => r.id !== id);
+      setSavedReports(updatedReports);
+      localStorage.setItem('simulationSavedReports', JSON.stringify(updatedReports));
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50 p-4 md:p-8 font-sans text-gray-800">
+      <div className="max-w-7xl mx-auto space-y-6">
+        
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
+              <Calculator className="w-6 h-6 text-blue-600" />
+              SaaS風 派遣売上シミュレーション
+            </h1>
+            <p className="text-gray-500 mt-1 text-sm">
+              派遣事業の売上をSaaSのPL（損益計算書）になぞらえ、「既存顧客からの売上」と「新規顧客からの売上」に分解して任意の期間で予測します。
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          
+          {/* 左サイドバー */}
+          <div className="lg:col-span-3 space-y-4">
+            <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+              <h2 className="text-lg font-semibold border-b pb-3 mb-4">前提条件</h2>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1 text-blue-600">シミュレーション期間 (ヶ月)</label>
+                  <input type="number" value={params.months} onChange={(e) => handleParamChange('months', e.target.value)} min="1" max="120" className="w-full p-2 border rounded-md bg-blue-50 text-right focus:ring-2 focus:ring-blue-500 font-bold text-blue-700" />
+                </div>
+                <div className="pt-3 border-t">
+                  <div className="flex items-center gap-1 mb-1 group relative">
+                    <label className="block text-xs font-medium text-gray-500">期初継続稼働数 (人)</label>
+                    <Info className="w-3.5 h-3.5 text-gray-400 cursor-help" />
+                    <div className="absolute hidden group-hover:block bg-gray-900 text-white text-xs p-3 rounded-lg bottom-full left-0 mb-2 w-56 z-20 shadow-xl pointer-events-none font-normal leading-relaxed whitespace-normal">
+                      再配予定の稼働者を含みます。<br/>
+                      <span className="text-gray-300 text-[10.5px] mt-1 block leading-tight">
+                        ※再配とは派遣先を変更することです。派遣先が変わっても当社との雇用契約は続くため、期初の継続稼働人数に含めて計算します。
+                      </span>
+                      <div className="absolute -bottom-1 left-20 w-2 h-2 bg-gray-900 rotate-45"></div>
+                    </div>
+                  </div>
+                  <input type="number" value={params.initialUsers} onChange={(e) => handleParamChange('initialUsers', e.target.value)} className="w-full p-2 border rounded-md bg-gray-50 text-right focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">月間単価 (円)</label>
+                  <input type="number" value={params.unitPrice} onChange={(e) => handleParamChange('unitPrice', e.target.value)} step="10000" className="w-full p-2 border rounded-md bg-gray-50 text-right focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">月間退職率 (%)</label>
+                  <input type="number" value={params.churnRate * 100} onChange={(e) => handleParamChange('churnRate', e.target.value / 100)} step="0.1" className="w-full p-2 border rounded-md bg-gray-50 text-right focus:ring-2 focus:ring-blue-500" />
+                  <p className="text-[10px] text-gray-400 mt-1">※新規開始者も初月からこの率で退職する前提です</p>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">月間新規開始数 (人)</label>
+                  <input type="number" value={params.newUsersPerMonth} onChange={(e) => handleParamChange('newUsersPerMonth', e.target.value)} className="w-full p-2 border rounded-md bg-gray-50 text-right focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div className="pt-3 border-t">
+                  <label className="block text-xs font-medium text-gray-500 mb-1">直給率 (%)</label>
+                  <input type="number" value={params.directPayRate * 100} onChange={(e) => handleParamChange('directPayRate', e.target.value / 100)} step="0.01" className="w-full p-2 border rounded-md bg-gray-50 text-right focus:ring-2 focus:ring-blue-500" />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">対売上社保率 (%)</label>
+                  <input type="number" value={params.socialInsuranceRate * 100} onChange={(e) => handleParamChange('socialInsuranceRate', e.target.value / 100)} step="0.01" className="w-full p-2 border rounded-md bg-gray-50 text-right focus:ring-2 focus:ring-blue-500" />
+                </div>
+              </div>
+            </div>
+
+            {/* 保存済みレポート一覧 */}
+            <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+              <h2 className="text-lg font-semibold border-b pb-3 mb-4 flex items-center gap-2">
+                <History className="w-5 h-5 text-gray-500" />
+                保存済みレポート
+              </h2>
+              {savedReports.length === 0 ? (
+                <p className="text-sm text-gray-400 text-center py-4">保存されたレポートはありません</p>
+              ) : (
+                <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
+                  {savedReports.map(report => (
+                    <div 
+                      key={report.id} 
+                      onClick={() => loadSavedReport(report)}
+                      className="p-3 border border-gray-200 rounded-lg hover:bg-purple-50 hover:border-purple-200 cursor-pointer transition-colors group"
+                    >
+                      <div className="flex justify-between items-start mb-1">
+                        <div className="text-xs text-gray-500 flex items-center gap-1">
+                          <Clock className="w-3 h-3" />
+                          {report.date}
+                        </div>
+                        <button 
+                          onClick={(e) => deleteSavedReport(report.id, e)}
+                          className="text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                      <div className="font-semibold text-sm text-gray-800">
+                        {report.params.months}ヶ月: {formatCurrency(report.summaryRevenue)}
+                      </div>
+                      <div className="text-[11px] text-gray-500 mt-1 flex gap-2">
+                        <span>期初 {report.params.initialUsers}人</span>
+                        <span>退職率 {report.params.churnRate * 100}%</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* 右メイン: 結果表示 */}
+          <div className="lg:col-span-9 space-y-6">
+            
+            <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-semibold flex items-center gap-2">
+                  <TrendingUp className="w-5 h-5 text-gray-400" />
+                  指定期間の売上予測内訳
+                </h3>
+              </div>
+              <p className="text-sm text-gray-500 mb-5">
+                退職者が0人だった場合の「理論売上」から、退職によって失われた「機会損失（減収）」を差し引いて、最終的な「実績売上」を算出しています。
+              </p>
+
+              <div className="flex flex-col gap-4">
+                <div className="flex flex-col md:flex-row items-stretch md:items-center gap-2 bg-gray-50 p-4 rounded-xl border border-gray-200">
+                  <div className="w-full md:w-20 text-sm font-bold text-gray-600 md:text-center shrink-0">既存顧客</div>
+                  <div className="flex-1 flex items-center gap-2">
+                    <MetricCard title="理論上の期間売上" value={formatCurrency(result.plMetrics.existingTheoreticalPeriodRevenue)} description={`期初の既存顧客が一人も退職しなかった場合の最大売上（期初人数 × 単価 × ${params.months}ヶ月）`} />
+                    <div className="text-xl font-bold text-gray-400">－</div>
+                    <MetricCard title="退職による減収 (Churn)" value={formatCurrency(result.plMetrics.existingChurnLoss)} type="danger" description="退職によって得られなくなった機会損失の合計額" />
+                    <div className="text-xl font-bold text-gray-400">＝</div>
+                    <MetricCard title="期間実績売上" value={formatCurrency(result.plMetrics.existingRevenue)} type="primary" description="既存顧客からの実際の売上着地見込" />
+                  </div>
+                </div>
+
+                <div className="flex flex-col md:flex-row items-stretch md:items-center gap-2 bg-gray-50 p-4 rounded-xl border border-gray-200">
+                  <div className="w-full md:w-20 text-sm font-bold text-gray-600 md:text-center shrink-0">新規獲得</div>
+                  <div className="flex-1 flex items-center gap-2">
+                    <MetricCard title="理論上の期間売上" value={formatCurrency(result.plMetrics.newTheoreticalPeriodRevenue)} description="獲得した新規顧客がその後一人も退職しなかった場合の最大売上" />
+                    <div className="text-xl font-bold text-gray-400">－</div>
+                    <MetricCard title="退職による減収 (Churn)" value={formatCurrency(result.plMetrics.newChurnLoss)} type="danger" description="新規獲得した顧客が早期退職したことによる機会損失" />
+                    <div className="text-xl font-bold text-gray-400">＝</div>
+                    <MetricCard title="期間実績売上" value={formatCurrency(result.plMetrics.newRevenue)} type="success" description="新規顧客からの実際の売上着地見込" />
+                  </div>
+                </div>
+
+                <div className="flex justify-end mt-2">
+                  <div className="w-full md:w-1/2 lg:w-1/3">
+                    <MetricCard title="期間予測 総売上" value={formatCurrency(result.plMetrics.totalRevenue)} type="purple" description={`既存と新規の実績売上を足し合わせた、${params.months}ヶ月間の総売上高です。`} />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100 flex flex-col md:flex-row items-center justify-between gap-4">
+              <div className="flex items-center gap-4">
+                <div className="p-4 bg-blue-50 text-blue-600 rounded-full"><Users className="w-7 h-7" /></div>
+                <div>
+                  <p className="text-sm text-gray-500 font-medium">最終月末の総稼働見込</p>
+                  <p className="text-3xl font-bold text-gray-900">{formatNumber(result.finalUsers)} <span className="text-base font-normal text-gray-500">人</span></p>
+                </div>
+              </div>
+              
+              <div className="md:border-l border-gray-100 md:pl-6 text-right w-full md:w-auto flex md:block justify-between items-center">
+                <p className="text-[11px] text-gray-400 flex items-center md:justify-end gap-1 mb-0.5">
+                  <Info className="w-3 h-3" />
+                  参考: 期末時点の理論年商 (ARR)
+                </p>
+                <p className="text-sm text-gray-400 font-medium">{formatCurrency(result.saasMetrics.endingARR)}</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                <h3 className="text-md font-bold mb-1 text-gray-800">既存顧客：退職による減収推移</h3>
+                <p className="text-[11px] text-gray-500 mb-4 h-8">
+                  全体（棒の高さ）が理論上の売上です。赤色部分が毎月の退職によって「失われ続けている売上」を示します。
+                </p>
+                <div className="h-56 w-full">
+                  <ResponsiveContainer>
+                    <BarChart data={result.monthlyData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                      <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#9CA3AF' }} dy={10} />
+                      <YAxis tickFormatter={yAxisFormatter} axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#9CA3AF' }} />
+                      <RechartsTooltip formatter={(value) => [formatCurrency(value), '']} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
+                      <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} iconType="circle" />
+                      <Bar dataKey="existingRevenue" name="実績売上" stackId="a" fill="#3B82F6" radius={[0, 0, 4, 4]} />
+                      <Bar dataKey="existingLostRevenue" name="失われた売上(退職)" stackId="a" fill="#FECACA" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                <h3 className="text-md font-bold mb-1 text-gray-800">新規獲得：退職による減収推移</h3>
+                <p className="text-[11px] text-gray-500 mb-4 h-8">
+                  獲得により売上（緑色）は伸びますが、退職率の影響で本来得られるはずの売上（赤色）が徐々に削られています。
+                </p>
+                <div className="h-56 w-full">
+                  <ResponsiveContainer>
+                    <BarChart data={result.monthlyData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                      <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#9CA3AF' }} dy={10} />
+                      <YAxis tickFormatter={yAxisFormatter} axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#9CA3AF' }} />
+                      <RechartsTooltip formatter={(value) => [formatCurrency(value), '']} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
+                      <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} iconType="circle" />
+                      <Bar dataKey="newRevenue" name="実績売上" stackId="a" fill="#10B981" radius={[0, 0, 4, 4]} />
+                      <Bar dataKey="newLostRevenue" name="失われた売上(退職)" stackId="a" fill="#FECACA" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mt-6">
+              <h3 className="text-md font-bold mb-4">総稼働人数の推移</h3>
+              <div className="h-56 w-full">
+                <ResponsiveContainer>
+                  <ComposedChart data={result.monthlyData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
+                    <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#9CA3AF' }} dy={10} />
+                    <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 11, fill: '#9CA3AF' }} />
+                    <RechartsTooltip formatter={(value) => [formatNumber(value) + ' 人', '']} contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
+                    <Legend wrapperStyle={{ fontSize: '12px', paddingTop: '10px' }} iconType="circle" />
+                    <Bar dataKey="existingUsers" name="既存稼働者" stackId="a" fill="#BFDBFE" radius={[0, 0, 4, 4]} />
+                    <Bar dataKey="newUsers" name="新規稼働者" stackId="a" fill="#6EE7B7" radius={[4, 4, 0, 0]} />
+                    <Line type="monotone" dataKey="totalUsers" name="総稼働数" stroke="#1E40AF" strokeWidth={3} dot={{ r: 4 }} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm text-right">
+                  <thead className="bg-gray-50 text-gray-500 font-medium border-b">
+                    <tr>
+                      <th className="px-4 py-3 text-left">月</th>
+                      <th className="px-4 py-3">既存稼働数</th>
+                      <th className="px-4 py-3">新規稼働数</th>
+                      <th className="px-4 py-3 text-blue-600">総稼働数</th>
+                      <th className="px-4 py-3">既存実績売上</th>
+                      <th className="px-4 py-3">新規実績売上</th>
+                      <th className="px-4 py-3 font-bold text-gray-900">当月売上合計</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {result.monthlyData.map((row, i) => (
+                      <tr key={i} className="hover:bg-gray-50 transition-colors">
+                        <td className="px-4 py-3 text-left font-medium text-gray-900">{row.month}</td>
+                        <td className="px-4 py-3 text-gray-600">{formatNumber(row.existingUsers)}</td>
+                        <td className="px-4 py-3 text-gray-600">{formatNumber(row.newUsers)}</td>
+                        <td className="px-4 py-3 text-blue-600 font-medium">{formatNumber(row.totalUsers)}</td>
+                        <td className="px-4 py-3 text-gray-600">{formatCurrency(row.existingRevenue)}</td>
+                        <td className="px-4 py-3 text-gray-600">{formatCurrency(row.newRevenue)}</td>
+                        <td className="px-4 py-3 font-bold text-gray-900">{formatCurrency(row.totalRevenue)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot className="bg-gray-50 font-bold text-gray-900 border-t-2">
+                    <tr>
+                      <td className="px-4 py-4 text-left" colSpan={4}>期間累計 (PL)</td>
+                      <td className="px-4 py-4 text-blue-700">{formatCurrency(result.plMetrics.existingRevenue)}</td>
+                      <td className="px-4 py-4 text-green-700">{formatCurrency(result.plMetrics.newRevenue)}</td>
+                      <td className="px-4 py-4 text-purple-700">{formatCurrency(result.plMetrics.totalRevenue)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+
+            {/* AIレポート & チャット セクション */}
+            <div className="bg-gradient-to-br from-indigo-50 to-purple-50 p-6 rounded-xl shadow-sm border border-purple-100 mt-6">
+              <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4 gap-4">
+                <div>
+                  <h3 className="text-lg font-bold flex items-center gap-2 text-purple-900">
+                    <Sparkles className="w-5 h-5 text-purple-500" />
+                    AI経営分析レポート & 深掘りチャット
+                  </h3>
+                  <p className="text-sm text-purple-700 mt-1">
+                    現在の数値をAIが分析します。さらにチャットで具体的な改善策を相談・深掘りできます。
+                  </p>
+                </div>
+                <button
+                  onClick={generateReport}
+                  disabled={isGenerating}
+                  className="bg-purple-600 hover:bg-purple-700 text-white px-5 py-2.5 rounded-lg font-medium transition-colors flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap shadow-sm"
+                >
+                  {isGenerating ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      生成中...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-4 h-4" />
+                      レポートを生成
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {apiError && (
+                <div className="bg-red-50 text-red-600 p-4 rounded-lg mt-4 text-sm border border-red-200">
+                  {apiError}
+                </div>
+              )}
+
+              {aiReport && (
+                <div className="mt-4 flex flex-col gap-4">
+                  {/* レポート本文 */}
+                  <div className="bg-white p-5 rounded-lg border border-purple-100 shadow-sm">
+                    <div className="text-sm md:text-base text-gray-700 whitespace-pre-wrap leading-relaxed">
+                      {aiReport}
+                    </div>
+                    
+                    {/* 保存ボタン */}
+                    <div className="mt-6 pt-4 border-t border-gray-100 flex justify-end">
+                      <button 
+                        onClick={handleSaveReport} 
+                        disabled={isSavedDone}
+                        className={`text-sm flex items-center gap-1.5 px-4 py-2 rounded-md transition-colors ${
+                          isSavedDone 
+                            ? 'bg-green-50 text-green-600 border border-green-200' 
+                            : 'text-purple-600 hover:bg-purple-50 border border-transparent'
+                        }`}
+                      >
+                        {isSavedDone ? <Check className="w-4 h-4" /> : <Save className="w-4 h-4" />}
+                        {isSavedDone ? '保存しました' : 'このレポートとチャット履歴を保存'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* チャット機能 (UI) */}
+                  <div className="bg-white rounded-lg border border-purple-100 shadow-sm flex flex-col overflow-hidden h-[400px]">
+                    <div className="bg-purple-50 p-3 border-b border-purple-100 flex items-center gap-2">
+                      <MessageCircle className="w-4 h-4 text-purple-600" />
+                      <span className="font-semibold text-sm text-purple-900">AIコンサルタントに質問する</span>
+                    </div>
+                    
+                    {/* メッセージエリア */}
+                    <div ref={chatScrollRef} className="flex-1 p-4 overflow-y-auto space-y-4 bg-gray-50/50">
+                      {chatMessages.length === 0 ? (
+                        <div className="h-full flex flex-col items-center justify-center text-gray-400 p-4 text-center">
+                          <MessageCircle className="w-8 h-8 mb-2 opacity-50" />
+                          <p className="text-sm">レポートの内容について、さらに深掘りしたいことを質問してみましょう。</p>
+                          <p className="text-xs mt-2">例: 「目標売上を〇〇円にするには、退職率を何%まで下げるべき？」<br/>「再配を成功させるための具体的なステップを教えて」</p>
+                        </div>
+                      ) : (
+                        chatMessages.map((msg, i) => (
+                          <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                            <div className={`max-w-[85%] p-3 rounded-xl text-sm whitespace-pre-wrap leading-relaxed ${
+                              msg.role === 'user' 
+                                ? 'bg-purple-600 text-white rounded-tr-none shadow-sm' 
+                                : 'bg-white border border-gray-200 text-gray-800 rounded-tl-none shadow-sm'
+                            }`}>
+                              {msg.text}
+                            </div>
+                          </div>
+                        ))
+                      )}
+                      {isChatting && (
+                        <div className="flex justify-start">
+                           <div className="bg-white border border-gray-200 p-3 rounded-xl rounded-tl-none shadow-sm flex items-center gap-2">
+                             <Loader2 className="w-4 h-4 animate-spin text-purple-500" />
+                             <span className="text-xs text-gray-500 font-medium">回答を生成中...</span>
+                           </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 入力エリア */}
+                    <div className="p-3 bg-white border-t border-gray-100 flex gap-2">
+                      <input 
+                        type="text" 
+                        value={chatInput}
+                        onChange={e => setChatInput(e.target.value)}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                            handleSendMessage();
+                          }
+                        }}
+                        placeholder="質問を入力してください..."
+                        className="flex-1 p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 transition-shadow"
+                        disabled={isChatting}
+                      />
+                      <button 
+                        onClick={handleSendMessage}
+                        disabled={!chatInput.trim() || isChatting}
+                        className="bg-purple-600 text-white p-2.5 rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center min-w-[44px]"
+                      >
+                        <Send className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
